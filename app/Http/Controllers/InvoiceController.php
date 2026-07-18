@@ -1,0 +1,389 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Mail\InvoiceMail;
+use App\Models\Client;
+use App\Models\Invoice;
+use App\Models\InvoiceItem;
+use App\Models\Product;
+use App\Models\StockMovement;
+use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Validation\ValidationException;
+
+class InvoiceController extends Controller
+{
+    public function index()
+    {
+        return view('invoices.index', [
+            'invoices' => Invoice::latest()->paginate(12),
+            'statusOptions' => Invoice::STATUS_LABELS,
+        ]);
+    }
+
+    public function create()
+    {
+        return view('invoices.create', [
+            'products' => Product::orderBy('name')->get(),
+            'clients' => Client::orderBy('name')->get(),
+            'invoice' => new Invoice([
+                'invoice_date' => now()->toDateString(),
+                'tax' => 0,
+                'discount_type' => 'fixed',
+                'discount_value' => 0,
+            ]),
+        ]);
+    }
+
+    public function store(Request $request)
+    {
+        $data = $this->validateInvoice($request);
+        $invoice = null;
+
+        DB::transaction(function () use (&$invoice, $data): void {
+            $clientPayload = $this->resolveClientPayload($data);
+
+            $invoice = Invoice::create([
+                'client_id' => $clientPayload['client_id'],
+                'invoice_number' => $this->nextInvoiceNumber(),
+                'invoice_date' => $data['invoice_date'],
+                'due_date' => $data['due_date'] ?? null,
+                'customer_name' => $clientPayload['customer_name'],
+                'customer_phone' => $clientPayload['customer_phone'],
+                'customer_email' => $clientPayload['customer_email'],
+                'customer_address' => $clientPayload['customer_address'],
+                'notes' => $data['notes'] ?? null,
+                'tax' => $data['tax'] ?? 0,
+                'discount_type' => $data['discount_type'] ?? 'fixed',
+                'discount_value' => $data['discount_value'] ?? 0,
+                'paid_amount' => 0,
+                'status' => 'draft',
+            ]);
+
+            $totals = $this->applyItemsAndStock($invoice, $data['items'], (float) ($data['tax'] ?? 0), $data['discount_type'] ?? 'fixed', (float) ($data['discount_value'] ?? 0));
+            $invoice->update($totals + [
+                'tax' => $data['tax'] ?? 0,
+                'discount_type' => $data['discount_type'] ?? 'fixed',
+                'discount_value' => $data['discount_value'] ?? 0,
+            ]);
+        });
+
+        return redirect()->route('invoices.show', $invoice)->with('success', 'Facture creee et stock mis a jour.');
+    }
+
+    public function show(Invoice $invoice)
+    {
+        return view('invoices.show', [
+            'invoice' => $invoice->load('items.product'),
+            'statusOptions' => Invoice::STATUS_LABELS,
+        ]);
+    }
+
+    public function edit(Invoice $invoice)
+    {
+        return view('invoices.edit', [
+            'invoice' => $invoice->load('items.product'),
+            'products' => Product::orderBy('name')->get(),
+            'clients' => Client::orderBy('name')->get(),
+        ]);
+    }
+
+    public function update(Request $request, Invoice $invoice)
+    {
+        $data = $this->validateInvoice($request);
+
+        DB::transaction(function () use ($invoice, $data): void {
+            $clientPayload = $this->resolveClientPayload($data, $invoice->client_id);
+
+            $invoice->load('items');
+            $this->restoreStockFromInvoice($invoice, 'Correction apres edition de facture');
+            $invoice->items()->delete();
+
+            $totals = $this->applyItemsAndStock($invoice, $data['items'], (float) ($data['tax'] ?? 0), $data['discount_type'] ?? 'fixed', (float) ($data['discount_value'] ?? 0));
+
+            $invoice->update([
+                'client_id' => $clientPayload['client_id'],
+                'invoice_date' => $data['invoice_date'],
+                'due_date' => $data['due_date'] ?? null,
+                'customer_name' => $clientPayload['customer_name'],
+                'customer_phone' => $clientPayload['customer_phone'],
+                'customer_email' => $clientPayload['customer_email'],
+                'customer_address' => $clientPayload['customer_address'],
+                'notes' => $data['notes'] ?? null,
+                'tax' => $data['tax'] ?? 0,
+                'discount_type' => $data['discount_type'] ?? 'fixed',
+                'discount_value' => $data['discount_value'] ?? 0,
+                'total' => $totals['total'],
+                'subtotal' => $totals['subtotal'],
+                'paid_amount' => min((float) $invoice->paid_amount, $totals['total']),
+            ]);
+
+            if ((float) $invoice->fresh()->paid_amount >= $invoice->fresh()->computedTotal() && $invoice->status !== Invoice::STATUS_CANCELLED) {
+                $invoice->update(['status' => Invoice::STATUS_PAID]);
+            }
+        });
+
+        return redirect()->route('invoices.show', $invoice)->with('success', 'Facture modifiee et stock recalcule.');
+    }
+
+    public function destroy(Invoice $invoice)
+    {
+        DB::transaction(function () use ($invoice): void {
+            $invoice->load('items');
+            $this->restoreStockFromInvoice($invoice, 'Retour stock apres suppression facture');
+            $invoice->delete();
+        });
+
+        return redirect()->route('invoices.index')->with('success', 'Facture supprimee et stock restaure.');
+    }
+
+    public function updateStatus(Request $request, Invoice $invoice): RedirectResponse
+    {
+        $validated = $request->validate([
+            'status' => ['required', 'in:' . implode(',', Invoice::allowedStatuses())],
+        ]);
+
+        $invoice->update(['status' => $validated['status']]);
+
+        return back()->with('success', 'Statut facture mis a jour: ' . $invoice->statusLabel() . '.');
+    }
+
+    public function recordPayment(Request $request, Invoice $invoice): RedirectResponse
+    {
+        if ($invoice->status === Invoice::STATUS_CANCELLED) {
+            return back()->with('error', 'Impossible d\'enregistrer un paiement sur une facture annulee.');
+        }
+
+        $validated = $request->validate([
+            'amount' => ['required', 'numeric', 'min:0.01'],
+        ]);
+
+        $nextPaidAmount = min($invoice->computedTotal(), $invoice->normalizedPaidAmount() + (float) $validated['amount']);
+        $nextStatus = $invoice->status;
+
+        if ($nextPaidAmount >= $invoice->computedTotal()) {
+            $nextStatus = Invoice::STATUS_PAID;
+        } elseif ($nextPaidAmount > 0 && $invoice->status !== Invoice::STATUS_PAID) {
+            $nextStatus = Invoice::STATUS_PENDING;
+        }
+
+        $invoice->update([
+            'paid_amount' => $nextPaidAmount,
+            'status' => $nextStatus,
+        ]);
+
+        return back()->with('success', 'Paiement enregistre. Montant paye: ' . number_format($invoice->normalizedPaidAmount(), 2) . ', reste a payer: ' . number_format($invoice->amountDue(), 2) . '.');
+    }
+
+    public function sendEmail(Invoice $invoice): RedirectResponse
+    {
+        $invoice->load('items.product');
+
+        if (!$invoice->customer_email) {
+            return back()->with('error', 'Ajoute un email client avant envoi.');
+        }
+
+        $pdfBinary = Pdf::loadView('invoices.pdf', ['invoice' => $invoice])->output();
+        Mail::to($invoice->customer_email)->send(new InvoiceMail($invoice, $pdfBinary));
+
+        $invoice->update(['status' => 'sent']);
+
+        return back()->with('success', 'Facture envoyee par email.');
+    }
+
+    public function downloadPdf(Invoice $invoice)
+    {
+        $invoice->load('items.product');
+
+        return Pdf::loadView('invoices.pdf', ['invoice' => $invoice])
+            ->download('facture-' . $invoice->invoice_number . '.pdf');
+    }
+
+    public function publicPdf(Request $request, Invoice $invoice)
+    {
+        if (!$request->hasValidSignature()) {
+            abort(403);
+        }
+
+        $invoice->load('items.product');
+
+        return Pdf::loadView('invoices.pdf', ['invoice' => $invoice])
+            ->download('facture-' . $invoice->invoice_number . '.pdf');
+    }
+
+    public function sendWhatsapp(Invoice $invoice): RedirectResponse
+    {
+        if (!$invoice->customer_phone) {
+            return back()->with('error', 'Ajoute un numero client avant WhatsApp.');
+        }
+
+        $phone = preg_replace('/\D+/', '', $invoice->customer_phone);
+        $amount = number_format($invoice->computedTotal(), 2, '.', '');
+        $pdfUrl = URL::temporarySignedRoute(
+            'invoices.public-pdf',
+            now()->addDays(7),
+            ['invoice' => $invoice->id]
+        );
+
+        $message = rawurlencode(
+            'Bonjour ' . $invoice->customer_name . ', voici votre facture ' .
+            $invoice->invoice_number . ' de montant ' . $amount . '. ' .
+            'Telechargez votre PDF ici: ' . $pdfUrl . ' Merci.'
+        );
+
+        return redirect('https://wa.me/' . $phone . '?text=' . $message);
+    }
+
+    private function validateInvoice(Request $request): array
+    {
+        return $request->validate([
+            'invoice_date' => ['required', 'date'],
+            'due_date' => ['nullable', 'date'],
+            'client_id' => ['nullable', 'exists:clients,id'],
+            'customer_name' => ['nullable', 'required_without_all:client_id,new_client_name', 'string', 'max:255'],
+            'customer_phone' => ['nullable', 'string', 'max:255'],
+            'customer_email' => ['nullable', 'email', 'max:255'],
+            'customer_address' => ['nullable', 'string', 'max:255'],
+            'tax' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'discount_type' => ['nullable', 'in:fixed,percent'],
+            'discount_value' => ['nullable', 'numeric', 'min:0'],
+            'notes' => ['nullable', 'string'],
+            'new_client_name' => ['nullable', 'string', 'max:255'],
+            'new_client_phone' => ['nullable', 'string', 'max:255'],
+            'new_client_email' => ['nullable', 'email', 'max:255'],
+            'new_client_address' => ['nullable', 'string', 'max:255'],
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.product_id' => ['required', 'exists:products,id'],
+            'items.*.quantity' => ['required', 'integer', 'min:1'],
+        ]);
+    }
+
+    private function resolveClientPayload(array $data, ?int $fallbackClientId = null): array
+    {
+        if (!empty($data['new_client_name'])) {
+            $client = Client::create([
+                'name' => $data['new_client_name'],
+                'phone' => $data['new_client_phone'] ?? null,
+                'email' => $data['new_client_email'] ?? null,
+                'address' => $data['new_client_address'] ?? null,
+            ]);
+
+            return [
+                'client_id' => $client->id,
+                'customer_name' => $client->name,
+                'customer_phone' => $client->phone,
+                'customer_email' => $client->email,
+                'customer_address' => $client->address,
+            ];
+        }
+
+        $clientId = $data['client_id'] ?? $fallbackClientId;
+        if ($clientId) {
+            $client = Client::findOrFail($clientId);
+
+            return [
+                'client_id' => $client->id,
+                'customer_name' => $client->name,
+                'customer_phone' => $client->phone,
+                'customer_email' => $client->email,
+                'customer_address' => $client->address,
+            ];
+        }
+
+        return [
+            'client_id' => null,
+            'customer_name' => $data['customer_name'],
+            'customer_phone' => $data['customer_phone'] ?? null,
+            'customer_email' => $data['customer_email'] ?? null,
+            'customer_address' => $data['customer_address'] ?? null,
+        ];
+    }
+
+    private function applyItemsAndStock(Invoice $invoice, array $items, float $tax, string $discountType = 'fixed', float $discountValue = 0): array
+    {
+        $subtotal = 0;
+
+        foreach ($items as $item) {
+            $product = Product::lockForUpdate()->findOrFail($item['product_id']);
+            $quantity = (int) $item['quantity'];
+
+            if ($product->quantity < $quantity) {
+                throw ValidationException::withMessages([
+                    'items' => ['Stock insuffisant pour le produit: ' . $product->name],
+                ]);
+            }
+
+            $unitPrice = (float) $product->unit_price;
+            $lineTotal = $unitPrice * $quantity;
+            $subtotal += $lineTotal;
+
+            InvoiceItem::create([
+                'invoice_id' => $invoice->id,
+                'product_id' => $product->id,
+                'quantity' => $quantity,
+                'unit_price' => $unitPrice,
+                'line_total' => $lineTotal,
+            ]);
+
+            $product->decrement('quantity', $quantity);
+
+            StockMovement::create([
+                'product_id' => $product->id,
+                'invoice_id' => $invoice->id,
+                'type' => 'out',
+                'quantity' => $quantity,
+                'reference' => $invoice->invoice_number,
+                'notes' => 'Sortie de stock par facture',
+            ]);
+        }
+
+        $discountAmount = 0;
+
+        if ($discountValue > 0) {
+            $discountAmount = $discountType === 'percent'
+                ? min($subtotal, $subtotal * ($discountValue / 100))
+                : min($subtotal, $discountValue);
+        }
+
+        $netSubtotal = max(0, $subtotal - $discountAmount);
+        $taxAmount = $netSubtotal * ($tax / 100);
+
+        return [
+            'subtotal' => $subtotal,
+            'total' => $netSubtotal + $taxAmount,
+        ];
+    }
+
+    private function restoreStockFromInvoice(Invoice $invoice, string $note): void
+    {
+        foreach ($invoice->items as $item) {
+            $product = Product::lockForUpdate()->find($item->product_id);
+            if (!$product) {
+                continue;
+            }
+
+            $product->increment('quantity', $item->quantity);
+
+            StockMovement::create([
+                'product_id' => $product->id,
+                'invoice_id' => $invoice->id,
+                'type' => 'in',
+                'quantity' => $item->quantity,
+                'reference' => $invoice->invoice_number,
+                'notes' => $note,
+            ]);
+        }
+    }
+
+    private function nextInvoiceNumber(): string
+    {
+        $count = Invoice::count() + 1;
+
+        return 'FAC-' . now()->format('Ymd') . '-' . str_pad((string) $count, 4, '0', STR_PAD_LEFT);
+    }
+}

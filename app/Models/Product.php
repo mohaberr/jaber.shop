@@ -25,7 +25,7 @@ class Product extends Model
     ];
 
     protected $casts = [
-        'unit_price' => 'decimal:2',
+        'unit_price' => 'decimal:5',
     ];
 
     public function setImagePathAttribute(?string $value): void
@@ -42,7 +42,7 @@ class Product extends Model
     {
         $path = $this->image_path;
 
-        return $path ? Storage::disk('public')->url($path) : null;
+        return $path ? asset('storage/' . $path) : null;
     }
 
     private function normalizeImagePath(?string $path): ?string

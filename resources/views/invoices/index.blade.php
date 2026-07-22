@@ -74,7 +74,7 @@
             <strong>{{ $invoice->invoice_number }}</strong>
             <div>Date: {{ $invoice->invoice_date?->format('d/m/Y') }}</div>
             <div>Client: {{ $invoice->customer_name }}</div>
-            <div>Total: {{ number_format($invoice->computedTotal(), 2) }}</div>
+            <div>Montant TTC: {{ number_format($invoice->computedTotal(), 2) }}</div>
             <div>Paye: {{ number_format($invoice->normalizedPaidAmount(), 2) }} ({{ number_format($invoice->paidPercent(), 2) }}%)</div>
             <div>Reste: {{ number_format($invoice->amountDue(), 2) }}</div>
             <div>Statut: {{ $invoice->statusLabel() }}</div>
@@ -99,6 +99,11 @@
                     @csrf
                     <input class="control-sm" type="number" name="amount" step="0.01" min="0.01" placeholder="Montant" style="max-width: 108px;">
                     <button class="btn btn-main btn-sm" type="submit">Encaisser</button>
+                </form>
+                <form method="POST" action="{{ route('invoices.destroy', $invoice) }}" onsubmit="return confirm('Supprimer la facture ? Le stock sera restaure.')">
+                    @csrf
+                    @method('DELETE')
+                    <button class="btn btn-danger btn-sm" type="submit">Supprimer</button>
                 </form>
             </div>
         </div>

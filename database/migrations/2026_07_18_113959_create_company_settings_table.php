@@ -18,6 +18,8 @@ return new class extends Migration
             $table->string('phone')->nullable();
             $table->text('address')->nullable();
             $table->string('tax_number')->nullable();
+            $table->decimal('default_tax_rate', 5, 2)->default(0);
+            $table->string('legal_mentions_title')->default('Mentions legales');
             $table->string('logo_path')->nullable();
             $table->timestamps();
         });

@@ -26,7 +26,13 @@
                 <label>Telephone</label>
                 <input name="phone" value="{{ old('phone', $setting->phone) }}" placeholder="06 00 00 00 00">
             </div>
+            <div class="field">
+                <label>TVA par defaut (%)</label>
+                <input type="number" min="0" max="100" step="0.01" name="default_tax_rate" value="{{ old('default_tax_rate', $setting->default_tax_rate ?? 0) }}" placeholder="Ex: 20">
+            </div>
         </div>
+
+        <p class="muted" style="margin-top: -4px;">Cette TVA sera pre-remplie sur les nouvelles factures. Si vous la changez sur une facture, cette valeur sera utilisee pour cette facture uniquement.</p>
 
         <div class="field">
             <label>Adresse de la societe</label>
@@ -34,9 +40,28 @@
         </div>
 
         <div class="field">
+            <label>Titre mentions legales</label>
+            <input name="legal_mentions_title" value="{{ old('legal_mentions_title', $setting->legal_mentions_title) }}" placeholder="Ex: Conditions de reglement (laisser vide si inutile)">
+            <span class="muted" style="font-size: 0.85rem;">Vous pouvez laisser vide pour afficher uniquement le texte sans titre.</span>
+        </div>
+
+        <div class="field">
             <label>Mentions legales (pour facture PDF)</label>
             <textarea name="legal_mentions" rows="4" placeholder="Ex: Paiement a 30 jours. Penalites de retard: ...">{{ old('legal_mentions', $setting->legal_mentions) }}</textarea>
             <span class="muted" style="font-size: 0.85rem;">Ce texte sera affiche en bas des factures PDF.</span>
+        </div>
+
+        <div class="card" style="background: #f7fff9; border: 1px solid #d8f0de; padding: 14px; margin: 14px 0;">
+            <label style="font-weight: 700; display: block; margin-bottom: 8px;">Champs de facture affiches</label>
+            <p class="muted" style="margin-top: 0;">Choisissez exactement les informations visibles sur les factures.</p>
+            <div class="grid">
+                @foreach($invoiceFieldOptions as $fieldKey => $fieldLabel)
+                    <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                        <input type="checkbox" name="invoice_field_visibility[]" value="{{ $fieldKey }}" style="width: auto;" @checked($invoiceFieldVisibility[$fieldKey] ?? true)>
+                        <span>{{ $fieldLabel }}</span>
+                    </label>
+                @endforeach
+            </div>
         </div>
 
         @php

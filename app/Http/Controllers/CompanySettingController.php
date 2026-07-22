@@ -11,8 +11,12 @@ class CompanySettingController extends Controller
 {
     public function edit()
     {
+        $setting = CompanySetting::current();
+
         return view('settings.edit', [
-            'setting' => CompanySetting::current(),
+            'setting' => $setting,
+            'invoiceFieldOptions' => CompanySetting::INVOICE_FIELD_OPTIONS,
+            'invoiceFieldVisibility' => $setting->invoiceFieldVisibility(),
         ]);
     }
 
@@ -24,12 +28,16 @@ class CompanySettingController extends Controller
             'phone' => ['nullable', 'string', 'max:255'],
             'address' => ['nullable', 'string', 'max:500'],
             'tax_number' => ['nullable', 'string', 'max:255'],
+            'default_tax_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'legal_mentions_title' => ['nullable', 'string', 'max:255'],
             'legal_mentions' => ['nullable', 'string', 'max:5000'],
             'logo' => ['nullable', 'image', 'max:2048'], // 2MB max
             'remove_logo' => ['nullable', 'boolean'],
             'custom_fields' => ['nullable', 'array'],
             'custom_fields.*.name' => ['nullable', 'string', 'max:100'],
             'custom_fields.*.value' => ['nullable', 'string', 'max:255'],
+            'invoice_field_visibility' => ['nullable', 'array'],
+            'invoice_field_visibility.*' => ['string', 'in:' . implode(',', array_keys(CompanySetting::INVOICE_FIELD_OPTIONS))],
         ]);
 
         $setting = CompanySetting::current();
@@ -58,14 +66,24 @@ class CompanySettingController extends Controller
             ->values()
             ->all();
 
+        $enabledVisibilityKeys = collect($validated['invoice_field_visibility'] ?? [])->map(fn ($v) => (string) $v)->all();
+        $invoiceFieldVisibility = collect(CompanySetting::defaultInvoiceFieldVisibility())
+            ->mapWithKeys(fn ($_default, $key) => [$key => in_array($key, $enabledVisibilityKeys, true)])
+            ->all();
+
         $setting->update([
             'company_name' => $validated['company_name'],
             'email' => $validated['email'] ?? null,
             'phone' => $validated['phone'] ?? null,
             'address' => $validated['address'] ?? null,
             'tax_number' => $validated['tax_number'] ?? null,
+            'default_tax_rate' => $validated['default_tax_rate'] ?? 0,
+            'legal_mentions_title' => trim((string) ($validated['legal_mentions_title'] ?? '')) !== ''
+                ? trim((string) $validated['legal_mentions_title'])
+                : '',
             'legal_mentions' => $validated['legal_mentions'] ?? null,
             'logo_path' => $logoPath,
+            'invoice_field_visibility' => $invoiceFieldVisibility,
             'custom_fields' => $customFields,
         ]);
 

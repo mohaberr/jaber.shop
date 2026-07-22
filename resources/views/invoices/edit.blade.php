@@ -9,7 +9,7 @@
     <form method="POST" action="{{ route('invoices.update', $invoice) }}">
         @csrf
         @method('PUT')
-        @include('invoices._form', ['invoice' => $invoice, 'products' => $products, 'items' => $existingItems])
+        @include('invoices._form', ['invoice' => $invoice, 'products' => $products, 'items' => $existingItems, 'paymentMethodOptions' => $paymentMethodOptions])
         <button class="btn btn-main" type="submit">Enregistrer</button>
         <a class="btn btn-alt" href="{{ route('invoices.show', $invoice) }}">Annuler</a>
     </form>

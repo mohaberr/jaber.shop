@@ -18,6 +18,7 @@
                     data-phone="{{ $client->phone }}"
                     data-email="{{ $client->email }}"
                     data-address="{{ $client->address }}"
+                    data-custom-fields='@json($client->custom_fields ?? [])'
                     @selected(old('client_id', $invoice->client_id) == $client->id)
                 >
                     {{ $client->name }}
@@ -41,6 +42,11 @@
         <label>Adresse client</label>
         <input name="customer_address" value="{{ old('customer_address', $invoice->customer_address) }}" id="customer_address">
     </div>
+    <div class="field" style="grid-column: 1 / -1;">
+        <label>Champs client personnalisés (repris automatiquement)</label>
+        <div id="customer_custom_fields_preview" class="muted" style="padding: 8px 10px; border: 1px dashed #d8d8d8; border-radius: 8px; min-height: 20px;">Aucun champ personnalisé.</div>
+        <div id="customer_custom_fields_inputs"></div>
+    </div>
     <div class="field">
         <label>TVA</label>
         <input type="number" min="0" max="100" step="0.01" name="tax" value="{{ old('tax', $invoice->tax ?? 0) }}">
@@ -56,6 +62,33 @@
     <div class="field">
         <label>Valeur réduction</label>
         <input type="number" min="0" step="0.01" name="discount_value" id="discount_value" value="{{ old('discount_value', $invoice->discount_value ?? 0) }}">
+    </div>
+    @php
+        $selectedPaymentMethod = old('payment_method');
+        $customPaymentMethod = old('custom_payment_method', $invoice->payment_method && !array_key_exists($invoice->payment_method, $paymentMethodOptions) ? $invoice->payment_method : '');
+        if ($selectedPaymentMethod === null) {
+            $selectedPaymentMethod = $invoice->payment_method && array_key_exists($invoice->payment_method, $paymentMethodOptions)
+                ? $invoice->payment_method
+                : ($customPaymentMethod !== '' ? 'autre' : '');
+        }
+    @endphp
+    <div class="field">
+        <label>Mode de paiement</label>
+        <select name="payment_method" id="payment_method">
+            <option value="">Choisir</option>
+            @foreach($paymentMethodOptions as $value => $label)
+                <option value="{{ $value }}" @selected($selectedPaymentMethod === $value)>{{ $label }}</option>
+            @endforeach
+        </select>
+    </div>
+    <div class="field" id="custom_payment_method_field" @if($selectedPaymentMethod !== 'autre') style="display: none;" @endif>
+        <label>Autre mode de paiement</label>
+        <input type="text" name="custom_payment_method" id="custom_payment_method" value="{{ $customPaymentMethod }}" placeholder="Ex: Mandat, mobile money...">
+    </div>
+    <div class="field" style="grid-column: 1 / -1;">
+        <label>Champs facture personnalisés</label>
+        <div id="invoice_custom_fields_list" style="display: grid; gap: 8px;"></div>
+        <button type="button" id="add-invoice-custom-field" class="btn btn-alt" style="margin-top: 8px;">+ Ajouter champ personnalisé</button>
     </div>
 </div>
 
@@ -121,24 +154,141 @@
 <script>
 (() => {
     const products = @json($products->map(fn($p) => ['id' => $p->id, 'name' => $p->name, 'quantity' => $p->quantity])->values());
+    const initialCustomerCustomFields = @json(old('customer_custom_fields', $invoice->customer_custom_fields ?? []));
+    const initialInvoiceCustomFields = @json(old('invoice_custom_fields', $invoice->invoice_custom_fields ?? []));
     const clientSelect = document.getElementById('client_select');
     const customerName = document.getElementById('customer_name');
     const customerPhone = document.getElementById('customer_phone');
     const customerEmail = document.getElementById('customer_email');
     const customerAddress = document.getElementById('customer_address');
+    const customFieldsPreview = document.getElementById('customer_custom_fields_preview');
+    const customFieldsInputs = document.getElementById('customer_custom_fields_inputs');
     const newClientName = document.getElementById('new_client_name');
     const newClientPhone = document.getElementById('new_client_phone');
     const newClientEmail = document.getElementById('new_client_email');
     const newClientAddress = document.getElementById('new_client_address');
     const confirmNewClientBtn = document.getElementById('confirm_new_client');
     const newClientFeedback = document.getElementById('new_client_feedback');
+    const paymentMethod = document.getElementById('payment_method');
+    const customPaymentMethodField = document.getElementById('custom_payment_method_field');
+    const customPaymentMethodInput = document.getElementById('custom_payment_method');
+    const invoiceCustomFieldsList = document.getElementById('invoice_custom_fields_list');
+    const addInvoiceCustomFieldBtn = document.getElementById('add-invoice-custom-field');
     const wrapper = document.getElementById('items-wrapper');
     const addBtn = document.getElementById('add-item');
+
+    const setCustomFieldInputs = (values) => {
+        if (!customFieldsInputs || !customFieldsPreview) {
+            return;
+        }
+
+        customFieldsInputs.innerHTML = '';
+
+        const rows = [];
+        (Array.isArray(values) ? values : []).forEach((field, index) => {
+            const label = (field?.label ?? '').toString().trim();
+            const value = (field?.value ?? '').toString().trim();
+            if (label === '' && value === '') {
+                return;
+            }
+
+            rows.push(`${label || 'Champ'}: ${value || '-'}`);
+
+            const hiddenLabel = document.createElement('input');
+            hiddenLabel.type = 'hidden';
+            hiddenLabel.name = `customer_custom_fields[${index}][label]`;
+            hiddenLabel.value = label;
+            customFieldsInputs.appendChild(hiddenLabel);
+
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = `customer_custom_fields[${index}][value]`;
+            hidden.value = value;
+            customFieldsInputs.appendChild(hidden);
+
+            const hiddenShow = document.createElement('input');
+            hiddenShow.type = 'hidden';
+            hiddenShow.name = `customer_custom_fields[${index}][show_on_invoice]`;
+            hiddenShow.value = !field || field.show_on_invoice ? '1' : '0';
+            customFieldsInputs.appendChild(hiddenShow);
+        });
+
+        customFieldsPreview.innerHTML = rows.length ? rows.map((row) => `<div>${row}</div>`).join('') : 'Aucun champ personnalisé.';
+    };
 
     const syncRequiredCustomerName = () => {
         const hasSelectedClient = !!clientSelect?.value;
         const hasNewClient = !!newClientName?.value?.trim();
         customerName.required = !hasSelectedClient && !hasNewClient;
+    };
+
+    const syncCustomPaymentMethod = () => {
+        if (!paymentMethod || !customPaymentMethodField || !customPaymentMethodInput) {
+            return;
+        }
+
+        const isOther = paymentMethod.value === 'autre';
+        customPaymentMethodField.style.display = isOther ? '' : 'none';
+        customPaymentMethodInput.required = isOther;
+
+        if (!isOther) {
+            customPaymentMethodInput.value = '';
+        }
+    };
+
+    const renderInvoiceCustomFields = (values) => {
+        if (!invoiceCustomFieldsList) {
+            return;
+        }
+
+        const fields = Array.isArray(values) && values.length
+            ? values
+            : [{ label: '', value: '', show_on_invoice: true }];
+
+        invoiceCustomFieldsList.innerHTML = '';
+
+        fields.forEach((field, index) => {
+            const row = document.createElement('div');
+            row.className = 'grid invoice-custom-field-row';
+            row.style.alignItems = 'end';
+            row.innerHTML = `
+                <div class="field">
+                    <label>Libellé</label>
+                    <input type="text" name="invoice_custom_fields[${index}][label]" value="${(field?.label ?? '').toString().replace(/"/g, '&quot;')}" placeholder="Ex: Référence bon de commande">
+                </div>
+                <div class="field">
+                    <label>Valeur</label>
+                    <input type="text" name="invoice_custom_fields[${index}][value]" value="${(field?.value ?? '').toString().replace(/"/g, '&quot;')}" placeholder="Ex: BC-2026-015">
+                </div>
+                <div class="field">
+                    <label style="display: inline-flex; gap: 8px; align-items: center;">
+                        <input type="checkbox" name="invoice_custom_fields[${index}][show_on_invoice]" value="1" ${(field && field.show_on_invoice !== false) ? 'checked' : ''}>
+                        Afficher sur facture
+                    </label>
+                </div>
+                <button type="button" class="btn btn-danger remove-invoice-custom-field">Retirer</button>
+            `;
+
+            invoiceCustomFieldsList.appendChild(row);
+        });
+
+        invoiceCustomFieldsList.querySelectorAll('.remove-invoice-custom-field').forEach((button) => {
+            button.onclick = () => {
+                const rows = invoiceCustomFieldsList.querySelectorAll('.invoice-custom-field-row');
+                if (rows.length > 1) {
+                    button.closest('.invoice-custom-field-row')?.remove();
+                    reindexInvoiceCustomFields();
+                }
+            };
+        });
+    };
+
+    const reindexInvoiceCustomFields = () => {
+        invoiceCustomFieldsList?.querySelectorAll('.invoice-custom-field-row').forEach((row, index) => {
+            row.querySelectorAll('input').forEach((input) => {
+                input.name = input.name.replace(/invoice_custom_fields\[\d+\]/, `invoice_custom_fields[${index}]`);
+            });
+        });
     };
 
     const updateCustomerFromSelectedClient = () => {
@@ -152,6 +302,14 @@
         customerEmail.value = selected.dataset.email || '';
         customerAddress.value = selected.dataset.address || '';
 
+        let customValues = {};
+        try {
+            customValues = JSON.parse(selected.dataset.customFields || '[]');
+        } catch (e) {
+            customValues = [];
+        }
+        setCustomFieldInputs(customValues);
+
         if (newClientName) {
             newClientName.value = '';
             newClientPhone.value = '';
@@ -162,6 +320,7 @@
 
     clientSelect?.addEventListener('change', updateCustomerFromSelectedClient);
     clientSelect?.addEventListener('change', syncRequiredCustomerName);
+    paymentMethod?.addEventListener('change', syncCustomPaymentMethod);
 
     newClientName?.addEventListener('input', () => {
         if (newClientName.value.trim() !== '' && clientSelect) {
@@ -184,6 +343,7 @@
         customerPhone.value = newClientPhone?.value || '';
         customerEmail.value = newClientEmail?.value || '';
         customerAddress.value = newClientAddress?.value || '';
+        setCustomFieldInputs([]);
 
         if (clientSelect) {
             clientSelect.value = '';
@@ -196,7 +356,23 @@
 
     if (clientSelect?.value) {
         updateCustomerFromSelectedClient();
+    } else {
+        setCustomFieldInputs(initialCustomerCustomFields || []);
     }
+
+    renderInvoiceCustomFields(initialInvoiceCustomFields || []);
+    syncCustomPaymentMethod();
+
+    addInvoiceCustomFieldBtn?.addEventListener('click', () => {
+        const currentValues = Array.from(invoiceCustomFieldsList?.querySelectorAll('.invoice-custom-field-row') ?? []).map((row) => ({
+            label: row.querySelector('input[name*="[label]"]')?.value || '',
+            value: row.querySelector('input[name*="[value]"]')?.value || '',
+            show_on_invoice: !!row.querySelector('input[type="checkbox"]')?.checked,
+        }));
+
+        currentValues.push({ label: '', value: '', show_on_invoice: true });
+        renderInvoiceCustomFields(currentValues);
+    });
 
     syncRequiredCustomerName();
 

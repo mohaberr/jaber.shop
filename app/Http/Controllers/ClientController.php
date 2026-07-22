@@ -48,11 +48,31 @@ class ClientController extends Controller
 
     private function validated(Request $request): array
     {
-        return $request->validate([
+        $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'phone' => ['nullable', 'string', 'max:255'],
             'email' => ['nullable', 'email', 'max:255'],
             'address' => ['nullable', 'string', 'max:255'],
+            'custom_fields' => ['nullable', 'array'],
+            'custom_fields.*.label' => ['nullable', 'string', 'max:100'],
+            'custom_fields.*.value' => ['nullable', 'string', 'max:255'],
+            'custom_fields.*.show_on_invoice' => ['nullable', 'boolean'],
         ]);
+
+        $customFields = collect($validated['custom_fields'] ?? [])
+            ->map(function ($field): array {
+                return [
+                    'label' => trim((string) ($field['label'] ?? '')),
+                    'value' => trim((string) ($field['value'] ?? '')),
+                    'show_on_invoice' => !empty($field['show_on_invoice']),
+                ];
+            })
+            ->filter(fn (array $field): bool => $field['label'] !== '' || $field['value'] !== '')
+            ->values()
+            ->all();
+
+        $validated['custom_fields'] = $customFields;
+
+        return $validated;
     }
 }

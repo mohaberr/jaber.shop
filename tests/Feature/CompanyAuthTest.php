@@ -50,6 +50,8 @@ class CompanyAuthTest extends TestCase
             'phone' => '0612345678',
             'address' => '10 Rue de Paris',
             'tax_number' => 'SIRET 99988877700011',
+            'default_tax_rate' => 20,
+            'legal_mentions_title' => 'Conditions legales',
             'logo' => $file,
         ]);
 
@@ -57,8 +59,10 @@ class CompanyAuthTest extends TestCase
         
         $setting = CompanySetting::current();
         $this->assertEquals('Jabir SAS', $setting->company_name);
+        $this->assertEquals(20.0, (float) $setting->default_tax_rate);
+        $this->assertEquals('Conditions legales', $setting->legal_mentions_title);
         $this->assertNotNull($setting->logo_path);
-        
-        Storage::disk('public')->assertExists($setting->logo_path);
+
+        $this->assertTrue(Storage::disk('public')->exists($setting->logo_path));
     }
 }

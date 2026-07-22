@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Mail\InvoiceMail;
 use App\Models\Client;
+use App\Models\CompanySetting;
 use App\Models\Invoice;
 use App\Models\InvoiceItem;
 use App\Models\Product;
@@ -28,12 +29,15 @@ class InvoiceController extends Controller
 
     public function create()
     {
+        $company = CompanySetting::current();
+
         return view('invoices.create', [
             'products' => Product::orderBy('name')->get(),
             'clients' => Client::orderBy('name')->get(),
+            'paymentMethodOptions' => Invoice::paymentMethodOptions(),
             'invoice' => new Invoice([
                 'invoice_date' => now()->toDateString(),
-                'tax' => 0,
+                'tax' => (float) ($company->default_tax_rate ?? 0),
                 'discount_type' => 'fixed',
                 'discount_value' => 0,
             ]),
@@ -44,9 +48,11 @@ class InvoiceController extends Controller
     {
         $data = $this->validateInvoice($request);
         $invoice = null;
+        $defaultTaxRate = (float) (CompanySetting::current()->default_tax_rate ?? 0);
 
-        DB::transaction(function () use (&$invoice, $data): void {
+        DB::transaction(function () use (&$invoice, $data, $defaultTaxRate): void {
             $clientPayload = $this->resolveClientPayload($data);
+            $taxRate = array_key_exists('tax', $data) ? (float) $data['tax'] : $defaultTaxRate;
 
             $invoice = Invoice::create([
                 'client_id' => $clientPayload['client_id'],
@@ -57,17 +63,20 @@ class InvoiceController extends Controller
                 'customer_phone' => $clientPayload['customer_phone'],
                 'customer_email' => $clientPayload['customer_email'],
                 'customer_address' => $clientPayload['customer_address'],
+                'customer_custom_fields' => $clientPayload['customer_custom_fields'],
+                'payment_method' => $this->resolvePaymentMethod($data),
+                'invoice_custom_fields' => $this->normalizeInvoiceCustomFields($data['invoice_custom_fields'] ?? []),
                 'notes' => $data['notes'] ?? null,
-                'tax' => $data['tax'] ?? 0,
+                'tax' => $taxRate,
                 'discount_type' => $data['discount_type'] ?? 'fixed',
                 'discount_value' => $data['discount_value'] ?? 0,
                 'paid_amount' => 0,
                 'status' => 'draft',
             ]);
 
-            $totals = $this->applyItemsAndStock($invoice, $data['items'], (float) ($data['tax'] ?? 0), $data['discount_type'] ?? 'fixed', (float) ($data['discount_value'] ?? 0));
+            $totals = $this->applyItemsAndStock($invoice, $data['items'], $taxRate, $data['discount_type'] ?? 'fixed', (float) ($data['discount_value'] ?? 0));
             $invoice->update($totals + [
-                'tax' => $data['tax'] ?? 0,
+                'tax' => $taxRate,
                 'discount_type' => $data['discount_type'] ?? 'fixed',
                 'discount_value' => $data['discount_value'] ?? 0,
             ]);
@@ -90,6 +99,7 @@ class InvoiceController extends Controller
             'invoice' => $invoice->load('items.product'),
             'products' => Product::orderBy('name')->get(),
             'clients' => Client::orderBy('name')->get(),
+            'paymentMethodOptions' => Invoice::paymentMethodOptions(),
         ]);
     }
 
@@ -114,6 +124,9 @@ class InvoiceController extends Controller
                 'customer_phone' => $clientPayload['customer_phone'],
                 'customer_email' => $clientPayload['customer_email'],
                 'customer_address' => $clientPayload['customer_address'],
+                'customer_custom_fields' => $clientPayload['customer_custom_fields'],
+                'payment_method' => $this->resolvePaymentMethod($data),
+                'invoice_custom_fields' => $this->normalizeInvoiceCustomFields($data['invoice_custom_fields'] ?? []),
                 'notes' => $data['notes'] ?? null,
                 'tax' => $data['tax'] ?? 0,
                 'discount_type' => $data['discount_type'] ?? 'fixed',
@@ -249,6 +262,16 @@ class InvoiceController extends Controller
             'customer_phone' => ['nullable', 'string', 'max:255'],
             'customer_email' => ['nullable', 'email', 'max:255'],
             'customer_address' => ['nullable', 'string', 'max:255'],
+            'customer_custom_fields' => ['nullable', 'array'],
+            'customer_custom_fields.*.label' => ['nullable', 'string', 'max:100'],
+            'customer_custom_fields.*.value' => ['nullable', 'string', 'max:255'],
+            'customer_custom_fields.*.show_on_invoice' => ['nullable', 'boolean'],
+            'payment_method' => ['nullable', 'string', 'in:' . implode(',', array_keys(Invoice::paymentMethodOptions()))],
+            'custom_payment_method' => ['nullable', 'string', 'max:255'],
+            'invoice_custom_fields' => ['nullable', 'array'],
+            'invoice_custom_fields.*.label' => ['nullable', 'string', 'max:100'],
+            'invoice_custom_fields.*.value' => ['nullable', 'string', 'max:255'],
+            'invoice_custom_fields.*.show_on_invoice' => ['nullable', 'boolean'],
             'tax' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'discount_type' => ['nullable', 'in:fixed,percent'],
             'discount_value' => ['nullable', 'numeric', 'min:0'],
@@ -261,6 +284,34 @@ class InvoiceController extends Controller
             'items.*.product_id' => ['required', 'exists:products,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
         ]);
+    }
+
+    private function resolvePaymentMethod(array $data): ?string
+    {
+        $paymentMethod = $data['payment_method'] ?? null;
+
+        if ($paymentMethod === 'autre') {
+            $customPaymentMethod = trim((string) ($data['custom_payment_method'] ?? ''));
+
+            return $customPaymentMethod !== '' ? $customPaymentMethod : null;
+        }
+
+        return $paymentMethod ?: null;
+    }
+
+    private function normalizeInvoiceCustomFields(array $fields): array
+    {
+        return collect($fields)
+            ->map(function ($field): array {
+                return [
+                    'label' => trim((string) ($field['label'] ?? '')),
+                    'value' => trim((string) ($field['value'] ?? '')),
+                    'show_on_invoice' => !empty($field['show_on_invoice']),
+                ];
+            })
+            ->filter(fn (array $field): bool => $field['label'] !== '' || $field['value'] !== '')
+            ->values()
+            ->all();
     }
 
     private function resolveClientPayload(array $data, ?int $fallbackClientId = null): array
@@ -279,6 +330,7 @@ class InvoiceController extends Controller
                 'customer_phone' => $client->phone,
                 'customer_email' => $client->email,
                 'customer_address' => $client->address,
+                'customer_custom_fields' => $client->custom_fields ?? [],
             ];
         }
 
@@ -292,6 +344,7 @@ class InvoiceController extends Controller
                 'customer_phone' => $client->phone,
                 'customer_email' => $client->email,
                 'customer_address' => $client->address,
+                'customer_custom_fields' => $client->custom_fields ?? [],
             ];
         }
 
@@ -301,6 +354,17 @@ class InvoiceController extends Controller
             'customer_phone' => $data['customer_phone'] ?? null,
             'customer_email' => $data['customer_email'] ?? null,
             'customer_address' => $data['customer_address'] ?? null,
+            'customer_custom_fields' => collect($data['customer_custom_fields'] ?? [])
+                ->map(function ($field): array {
+                    return [
+                        'label' => trim((string) ($field['label'] ?? '')),
+                        'value' => trim((string) ($field['value'] ?? '')),
+                        'show_on_invoice' => !empty($field['show_on_invoice']),
+                    ];
+                })
+                ->filter(fn (array $field): bool => $field['label'] !== '' || $field['value'] !== '')
+                ->values()
+                ->all(),
         ];
     }
 

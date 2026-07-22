@@ -18,7 +18,7 @@
             </div>
             <div class="field">
                 <label>Prix</label>
-                <input name="unit_price" type="number" step="0.01" min="0" value="{{ old('unit_price', $product->unit_price) }}" required>
+                <input name="unit_price" type="number" step="0.00001" min="0" value="{{ old('unit_price', $product->unit_price) }}" required>
             </div>
             <div class="field">
                 <label>Quantite</label>

@@ -16,7 +16,7 @@
             </div>
             <div class="field">
                 <label>Prix</label>
-                <input name="unit_price" type="number" step="0.01" min="0" required>
+                <input name="unit_price" type="number" step="0.00001" min="0" required>
             </div>
             <div class="field">
                 <label>Quantite</label>
@@ -95,7 +95,7 @@
                         <span class="muted">(Stock faible)</span>
                     @endif
                 </td>
-                <td>{{ number_format((float) $product->unit_price, 2) }}</td>
+                <td>{{ number_format((float) $product->unit_price, 5) }}</td>
                 <td>{{ $product->supplier?->name ?? '-' }}</td>
                 <td class="actions">
                     <a class="btn btn-alt" href="{{ route('products.edit', $product) }}">Modifier</a>
@@ -121,7 +121,7 @@
             @endif
             <strong>{{ $product->name }}</strong>
             <div>Stock: {{ $product->quantity }}</div>
-            <div>Prix: {{ number_format((float) $product->unit_price, 2) }}</div>
+            <div>Prix: {{ number_format((float) $product->unit_price, 5) }}</div>
             <div>Fournisseur: {{ $product->supplier?->name ?? '-' }}</div>
             <div class="actions">
                 <a class="btn btn-alt" href="{{ route('products.edit', $product) }}">Modifier</a>

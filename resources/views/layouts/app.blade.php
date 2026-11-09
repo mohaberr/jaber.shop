@@ -184,7 +184,11 @@
             border: 1px solid #dfe5eb;
             background: #fff;
             color: var(--ink);
-            font-weight: 600;
+            font-weight: 700;
+            font-size: 0.95rem;
+            line-height: 1;
+            font-family: "Segoe UI", sans-serif;
+            white-space: nowrap;
             transition: all 0.2s ease;
         }
 
@@ -216,6 +220,58 @@
         @media (max-width: 760px) {
             .desktop-table { display: none; }
             .card-list { display: block; }
+            .topbar {
+                align-items: stretch;
+                flex-direction: column;
+            }
+            .nav {
+                width: 100%;
+            }
+            .nav a,
+            .nav form,
+            .nav button {
+                flex: 1 1 calc(50% - 8px);
+            }
+            .nav a {
+                text-align: center;
+                justify-content: center;
+            }
+            .card {
+                padding: 14px;
+            }
+            .pagination {
+                justify-content: center;
+            }
+            .pagination .page-link,
+            .pagination .page-item span {
+                min-width: 42px;
+                height: 42px;
+                padding: 0 14px;
+                font-size: 1rem;
+            }
+            .card-list .card {
+                gap: 8px;
+            }
+            .card-list .actions {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                gap: 8px;
+            }
+            .card-list .actions > * {
+                width: 100%;
+            }
+            .card-list .actions form {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                width: 100%;
+            }
+            .card-list .actions .btn,
+            .card-list .actions .control-sm,
+            .card-list .actions select,
+            .card-list .actions input {
+                width: 100%;
+            }
         }
 
         @media (min-width: 761px) {

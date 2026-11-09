@@ -1,5 +1,10 @@
 <div class="grid">
     <div class="field">
+        <label>Numero de facture</label>
+        <input type="text" name="invoice_number" value="{{ old('invoice_number', $invoice->invoice_number) }}" placeholder="Laisser vide pour auto">
+        <span class="muted" style="font-size: 0.85rem;">Si vous le remplissez, ce numero sera utilise tel quel.</span>
+    </div>
+    <div class="field">
         <label>Date facture</label>
         <input type="date" name="invoice_date" value="{{ old('invoice_date', optional($invoice->invoice_date)->format('Y-m-d') ?? now()->toDateString()) }}" required>
     </div>

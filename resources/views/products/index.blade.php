@@ -1,6 +1,19 @@
 @extends('layouts.app')
 
 @section('content')
+<div class="card" style="margin-bottom: 12px;">
+    <form method="GET" action="{{ route('products.index') }}" class="actions" style="gap: 8px; align-items: end;">
+        <div class="field" style="margin-bottom: 0; min-width: 260px; flex: 1;">
+            <label>Rechercher un produit</label>
+            <input type="text" name="q" value="{{ $search ?? '' }}" placeholder="Nom ou SKU">
+        </div>
+        <button class="btn btn-main" type="submit">Rechercher</button>
+        @if(!empty($search))
+            <a class="btn btn-alt" href="{{ route('products.index') }}">Reinitialiser</a>
+        @endif
+    </form>
+</div>
+
 <div class="card">
     <h2 style="margin-top: 0;">Produits</h2>
     <form method="POST" action="{{ route('products.store') }}" enctype="multipart/form-data">
@@ -95,7 +108,7 @@
                         <span class="muted">(Stock faible)</span>
                     @endif
                 </td>
-                <td>{{ number_format((float) $product->unit_price, 5) }}</td>
+                <td>{{ $product->formattedUnitPrice() }}</td>
                 <td>{{ $product->supplier?->name ?? '-' }}</td>
                 <td class="actions">
                     <a class="btn btn-alt" href="{{ route('products.edit', $product) }}">Modifier</a>
@@ -121,7 +134,7 @@
             @endif
             <strong>{{ $product->name }}</strong>
             <div>Stock: {{ $product->quantity }}</div>
-            <div>Prix: {{ number_format((float) $product->unit_price, 5) }}</div>
+            <div>Prix: {{ $product->formattedUnitPrice() }}</div>
             <div>Fournisseur: {{ $product->supplier?->name ?? '-' }}</div>
             <div class="actions">
                 <a class="btn btn-alt" href="{{ route('products.edit', $product) }}">Modifier</a>

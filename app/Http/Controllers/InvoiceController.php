@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Validation\Rule;
 
 class InvoiceController extends Controller
 {
@@ -53,10 +54,11 @@ class InvoiceController extends Controller
         DB::transaction(function () use (&$invoice, $data, $defaultTaxRate): void {
             $clientPayload = $this->resolveClientPayload($data);
             $taxRate = array_key_exists('tax', $data) ? (float) $data['tax'] : $defaultTaxRate;
+            $invoiceNumber = $this->resolveInvoiceNumber($data);
 
             $invoice = Invoice::create([
                 'client_id' => $clientPayload['client_id'],
-                'invoice_number' => $this->nextInvoiceNumber(),
+                'invoice_number' => $invoiceNumber,
                 'invoice_date' => $data['invoice_date'],
                 'due_date' => $data['due_date'] ?? null,
                 'customer_name' => $clientPayload['customer_name'],
@@ -105,19 +107,19 @@ class InvoiceController extends Controller
 
     public function update(Request $request, Invoice $invoice)
     {
-        $data = $this->validateInvoice($request);
+        $data = $this->validateInvoice($request, $invoice->id);
 
         DB::transaction(function () use ($invoice, $data): void {
             $clientPayload = $this->resolveClientPayload($data, $invoice->client_id);
+            $invoiceNumber = $this->resolveInvoiceNumber($data, $invoice);
 
             $invoice->load('items');
             $this->restoreStockFromInvoice($invoice, 'Correction apres edition de facture');
             $invoice->items()->delete();
 
-            $totals = $this->applyItemsAndStock($invoice, $data['items'], (float) ($data['tax'] ?? 0), $data['discount_type'] ?? 'fixed', (float) ($data['discount_value'] ?? 0));
-
             $invoice->update([
                 'client_id' => $clientPayload['client_id'],
+                'invoice_number' => $invoiceNumber,
                 'invoice_date' => $data['invoice_date'],
                 'due_date' => $data['due_date'] ?? null,
                 'customer_name' => $clientPayload['customer_name'],
@@ -131,6 +133,11 @@ class InvoiceController extends Controller
                 'tax' => $data['tax'] ?? 0,
                 'discount_type' => $data['discount_type'] ?? 'fixed',
                 'discount_value' => $data['discount_value'] ?? 0,
+            ]);
+
+            $totals = $this->applyItemsAndStock($invoice, $data['items'], (float) ($data['tax'] ?? 0), $data['discount_type'] ?? 'fixed', (float) ($data['discount_value'] ?? 0));
+
+            $invoice->update([
                 'total' => $totals['total'],
                 'subtotal' => $totals['subtotal'],
                 'paid_amount' => min((float) $invoice->paid_amount, $totals['total']),
@@ -214,7 +221,7 @@ class InvoiceController extends Controller
         $invoice->load('items.product');
 
         return Pdf::loadView('invoices.pdf', ['invoice' => $invoice])
-            ->download('facture-' . $invoice->invoice_number . '.pdf');
+            ->download($invoice->pdfFileName());
     }
 
     public function publicPdf(Request $request, Invoice $invoice)
@@ -226,7 +233,7 @@ class InvoiceController extends Controller
         $invoice->load('items.product');
 
         return Pdf::loadView('invoices.pdf', ['invoice' => $invoice])
-            ->download('facture-' . $invoice->invoice_number . '.pdf');
+            ->download($invoice->pdfFileName());
     }
 
     public function sendWhatsapp(Invoice $invoice): RedirectResponse
@@ -252,38 +259,55 @@ class InvoiceController extends Controller
         return redirect('https://wa.me/' . $phone . '?text=' . $message);
     }
 
-    private function validateInvoice(Request $request): array
+    private function validateInvoice(Request $request, ?int $invoiceId = null): array
     {
-        return $request->validate([
-            'invoice_date' => ['required', 'date'],
-            'due_date' => ['nullable', 'date'],
-            'client_id' => ['nullable', 'exists:clients,id'],
-            'customer_name' => ['nullable', 'required_without_all:client_id,new_client_name', 'string', 'max:255'],
-            'customer_phone' => ['nullable', 'string', 'max:255'],
-            'customer_email' => ['nullable', 'email', 'max:255'],
-            'customer_address' => ['nullable', 'string', 'max:255'],
-            'customer_custom_fields' => ['nullable', 'array'],
-            'customer_custom_fields.*.label' => ['nullable', 'string', 'max:100'],
-            'customer_custom_fields.*.value' => ['nullable', 'string', 'max:255'],
-            'customer_custom_fields.*.show_on_invoice' => ['nullable', 'boolean'],
-            'payment_method' => ['nullable', 'string', 'in:' . implode(',', array_keys(Invoice::paymentMethodOptions()))],
-            'custom_payment_method' => ['nullable', 'string', 'max:255'],
-            'invoice_custom_fields' => ['nullable', 'array'],
-            'invoice_custom_fields.*.label' => ['nullable', 'string', 'max:100'],
-            'invoice_custom_fields.*.value' => ['nullable', 'string', 'max:255'],
-            'invoice_custom_fields.*.show_on_invoice' => ['nullable', 'boolean'],
-            'tax' => ['nullable', 'numeric', 'min:0', 'max:100'],
-            'discount_type' => ['nullable', 'in:fixed,percent'],
-            'discount_value' => ['nullable', 'numeric', 'min:0'],
-            'notes' => ['nullable', 'string'],
-            'new_client_name' => ['nullable', 'string', 'max:255'],
-            'new_client_phone' => ['nullable', 'string', 'max:255'],
-            'new_client_email' => ['nullable', 'email', 'max:255'],
-            'new_client_address' => ['nullable', 'string', 'max:255'],
-            'items' => ['required', 'array', 'min:1'],
-            'items.*.product_id' => ['required', 'exists:products,id'],
-            'items.*.quantity' => ['required', 'integer', 'min:1'],
-        ]);
+        return $request->validate(
+            [
+                'invoice_number' => ['nullable', 'string', 'max:255', Rule::unique('invoices', 'invoice_number')->ignore($invoiceId)],
+                'invoice_date' => ['required', 'date'],
+                'due_date' => ['nullable', 'date'],
+                'client_id' => ['nullable', 'exists:clients,id'],
+                'customer_name' => ['nullable', 'required_without_all:client_id,new_client_name', 'string', 'max:255'],
+                'customer_phone' => ['nullable', 'string', 'max:255'],
+                'customer_email' => ['nullable', 'email', 'max:255'],
+                'customer_address' => ['nullable', 'string', 'max:255'],
+                'customer_custom_fields' => ['nullable', 'array'],
+                'customer_custom_fields.*.label' => ['nullable', 'string', 'max:100'],
+                'customer_custom_fields.*.value' => ['nullable', 'string', 'max:255'],
+                'customer_custom_fields.*.show_on_invoice' => ['nullable', 'boolean'],
+                'payment_method' => ['nullable', 'string', 'in:' . implode(',', array_keys(Invoice::paymentMethodOptions()))],
+                'custom_payment_method' => ['nullable', 'string', 'max:255'],
+                'invoice_custom_fields' => ['nullable', 'array'],
+                'invoice_custom_fields.*.label' => ['nullable', 'string', 'max:100'],
+                'invoice_custom_fields.*.value' => ['nullable', 'string', 'max:255'],
+                'invoice_custom_fields.*.show_on_invoice' => ['nullable', 'boolean'],
+                'tax' => ['nullable', 'numeric', 'min:0', 'max:100'],
+                'discount_type' => ['nullable', 'in:fixed,percent'],
+                'discount_value' => ['nullable', 'numeric', 'min:0'],
+                'notes' => ['nullable', 'string'],
+                'new_client_name' => ['nullable', 'string', 'max:255'],
+                'new_client_phone' => ['nullable', 'string', 'max:255'],
+                'new_client_email' => ['nullable', 'email', 'max:255'],
+                'new_client_address' => ['nullable', 'string', 'max:255'],
+                'items' => ['required', 'array', 'min:1'],
+                'items.*.product_id' => ['required', 'exists:products,id'],
+                'items.*.quantity' => ['required', 'integer', 'min:1'],
+            ],
+            [
+                'invoice_number.unique' => 'Le numero de facture saisi existe deja. Veuillez choisir un autre numero.',
+            ]
+        );
+    }
+
+    private function resolveInvoiceNumber(array $data, ?Invoice $invoice = null): string
+    {
+        $manualInvoiceNumber = trim((string) ($data['invoice_number'] ?? ''));
+
+        if ($manualInvoiceNumber !== '') {
+            return $manualInvoiceNumber;
+        }
+
+        return $invoice?->invoice_number ?? $this->nextInvoiceNumber();
     }
 
     private function resolvePaymentMethod(array $data): ?string

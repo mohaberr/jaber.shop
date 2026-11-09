@@ -195,8 +195,8 @@
                 @endif
                 <td>{{ $item->product?->name ?? 'Produit supprime' }}</td>
                 <td>{{ $item->quantity }}</td>
-                <td class="right">{{ number_format((float) $item->unit_price, 2) }}</td>
-                <td class="right">{{ number_format((float) $item->line_total, 2) }}</td>
+                <td class="right">{{ $item->formattedUnitPrice() }}</td>
+                <td class="right">{{ $item->formattedLineTotal() }}</td>
             </tr>
         @endforeach
         </tbody>

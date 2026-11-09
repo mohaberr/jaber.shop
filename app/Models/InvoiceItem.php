@@ -32,4 +32,21 @@ class InvoiceItem extends Model
     {
         return $this->belongsTo(Product::class);
     }
+
+    public function formattedUnitPrice(): string
+    {
+        return static::formatDecimal((float) $this->unit_price, 5);
+    }
+
+    public function formattedLineTotal(): string
+    {
+        return static::formatDecimal((float) $this->line_total, 5);
+    }
+
+    private static function formatDecimal(float $value, int $precision): string
+    {
+        $formatted = number_format($value, $precision, '.', '');
+
+        return rtrim(rtrim($formatted, '0'), '.');
+    }
 }

@@ -102,6 +102,18 @@ class Invoice extends Model
         return self::PAYMENT_METHOD_OPTIONS[$this->payment_method] ?? $this->payment_method;
     }
 
+    public function pdfFileName(): string
+    {
+        $safeInvoiceNumber = preg_replace('/[^A-Za-z0-9._-]+/', '_', (string) $this->invoice_number);
+        $safeInvoiceNumber = trim((string) $safeInvoiceNumber, '._-');
+
+        if ($safeInvoiceNumber === '') {
+            $safeInvoiceNumber = 'facture-' . $this->id;
+        }
+
+        return 'facture-' . $safeInvoiceNumber . '.pdf';
+    }
+
     public function discountAmount(): float
     {
         $subtotal = (float) $this->subtotal;

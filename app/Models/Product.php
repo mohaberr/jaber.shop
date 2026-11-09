@@ -45,6 +45,11 @@ class Product extends Model
         return $path ? asset('storage/' . $path) : null;
     }
 
+    public function formattedUnitPrice(): string
+    {
+        return static::formatDecimal((float) $this->unit_price, 5);
+    }
+
     private function normalizeImagePath(?string $path): ?string
     {
         if (!$path) {
@@ -62,6 +67,13 @@ class Product extends Model
         }
 
         return $normalized ?: null;
+    }
+
+    private static function formatDecimal(float $value, int $precision): string
+    {
+        $formatted = number_format($value, $precision, '.', '');
+
+        return rtrim(rtrim($formatted, '0'), '.');
     }
 
     public function supplier(): BelongsTo

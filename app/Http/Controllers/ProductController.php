@@ -10,11 +10,23 @@ use Illuminate\Validation\Rule;
 
 class ProductController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
+        $search = trim((string) $request->query('q', ''));
+
+        $productsQuery = Product::with('supplier');
+
+        if ($search !== '') {
+            $productsQuery->where(function ($query) use ($search): void {
+                $query->where('name', 'like', '%' . $search . '%')
+                    ->orWhere('sku', 'like', '%' . $search . '%');
+            });
+        }
+
         return view('products.index', [
-            'products' => Product::with('supplier')->orderBy('name')->get(),
+            'products' => $productsQuery->orderBy('name')->get(),
             'suppliers' => Supplier::orderBy('name')->get(),
+            'search' => $search,
         ]);
     }
 
@@ -71,18 +83,23 @@ class ProductController extends Controller
 
     private function validated(Request $request, ?int $productId = null): array
     {
-        return $request->validate([
-            'supplier_id' => ['nullable', 'exists:suppliers,id'],
-            'new_supplier_name' => ['nullable', 'string', 'max:255'],
-            'name' => ['required', 'string', 'max:255'],
-            'sku' => ['nullable', 'string', 'max:255', Rule::unique('products', 'sku')->ignore($productId)],
-            'image' => ['nullable', 'image', 'max:2048'],
-            'remove_image' => ['nullable', 'boolean'],
-            'unit_price' => ['required', 'numeric', 'min:0'],
-            'quantity' => ['required', 'integer', 'min:0'],
-            'low_stock_threshold' => ['required', 'integer', 'min:0'],
-            'notes' => ['nullable', 'string'],
-        ]);
+        return $request->validate(
+            [
+                'supplier_id' => ['nullable', 'exists:suppliers,id'],
+                'new_supplier_name' => ['nullable', 'string', 'max:255'],
+                'name' => ['required', 'string', 'max:255'],
+                'sku' => ['nullable', 'string', 'max:255', Rule::unique('products', 'sku')->ignore($productId)],
+                'image' => ['nullable', 'image', 'max:2048'],
+                'remove_image' => ['nullable', 'boolean'],
+                'unit_price' => ['required', 'numeric', 'min:0'],
+                'quantity' => ['required', 'integer', 'min:0'],
+                'low_stock_threshold' => ['required', 'integer', 'min:0'],
+                'notes' => ['nullable', 'string'],
+            ],
+            [
+                'sku.unique' => 'Le SKU saisi existe deja. Veuillez choisir un autre SKU.',
+            ]
+        );
     }
 
     private function handleImage(Request $request, ?int $productId = null): ?string

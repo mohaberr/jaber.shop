@@ -156,6 +156,58 @@
         .kpi { font-size: 1.4rem; font-weight: 700; }
         .muted { color: var(--muted); }
 
+        .pagination {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            list-style: none;
+            padding: 0;
+            margin: 12px 0 0;
+            align-items: center;
+        }
+
+        .pagination .page-item {
+            display: inline-flex;
+            margin: 0;
+        }
+
+        .pagination .page-link,
+        .pagination .page-item span {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 38px;
+            height: 38px;
+            padding: 0 12px;
+            border-radius: 10px;
+            text-decoration: none;
+            border: 1px solid #dfe5eb;
+            background: #fff;
+            color: var(--ink);
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .pagination .page-item.active .page-link,
+        .pagination .page-item.active span {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
+
+        .pagination .page-item.disabled .page-link,
+        .pagination .page-item.disabled span {
+            background: #f3f4f6;
+            color: var(--muted);
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .pagination .page-link:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
         .mobile-stack {
             display: grid;
             gap: 10px;

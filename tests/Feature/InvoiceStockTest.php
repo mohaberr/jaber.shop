@@ -259,4 +259,38 @@ class InvoiceStockTest extends TestCase
         $this->assertStringContainsString('mille', strtolower($words));
         $this->assertStringContainsString('cinq cents', strtolower($words));
     }
+
+    public function test_invoice_can_be_created_with_manual_invoice_number(): void
+    {
+        $user = User::factory()->create();
+
+        $supplier = Supplier::create([
+            'name' => 'Fournisseur Numero',
+        ]);
+
+        $product = Product::create([
+            'supplier_id' => $supplier->id,
+            'name' => 'Produit Numero',
+            'unit_price' => 100,
+            'quantity' => 10,
+            'low_stock_threshold' => 2,
+        ]);
+
+        $response = $this->actingAs($user)->post(route('invoices.store'), [
+            'invoice_number' => 'FAC-MANUEL-2026-001',
+            'invoice_date' => '2026-07-26',
+            'customer_name' => 'Client Numero',
+            'items' => [
+                [
+                    'product_id' => $product->id,
+                    'quantity' => 1,
+                ],
+            ],
+        ]);
+
+        $invoice = Invoice::latest('id')->first();
+
+        $response->assertRedirect(route('invoices.show', $invoice));
+        $this->assertSame('FAC-MANUEL-2026-001', $invoice->invoice_number);
+    }
 }

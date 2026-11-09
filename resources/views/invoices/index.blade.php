@@ -108,5 +108,9 @@
             </div>
         </div>
     @endforeach
+
+    <div class="card" style="margin-top: 0;">
+        {{ $invoices->links() }}
+    </div>
 </div>
 @endsection
